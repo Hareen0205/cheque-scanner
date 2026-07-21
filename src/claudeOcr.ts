@@ -11,7 +11,7 @@ export async function extractWithClaude(imageBuffer: Buffer): Promise<ExtractedR
   const base64Image = imageBuffer.toString('base64');
 
   const message = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-3-5-sonnet-20240620',
     max_tokens: 2048,
     messages: [{
       role: 'user',
