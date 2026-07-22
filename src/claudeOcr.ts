@@ -26,26 +26,22 @@ export async function extractWithClaude(imageBuffer: Buffer): Promise<ExtractedR
         },
         {
           type: 'text',
-          text: `Extract all information from this cheque image. Return ONLY a JSON object with this exact structure:
+          text: `Extract this cheque/ledger entry's row from the image. Return ONLY a JSON object with this exact structure:
 
 {
-  "date": "date on cheque (DD/MM/YYYY or MM/DD/YYYY)",
-  "payee": "name of payee (who the cheque is made out to)",
-  "amountNum": "amount in numbers with $ symbol (e.g. $1,250.00)",
-  "amountWords": "amount written in words (e.g. One Thousand Two Hundred Fifty Dollars)",
-  "chequeNo": "cheque number (usually top right, 6-10 digits)",
-  "bank": "bank name",
-  "account": "account number if visible (mask with asterisks if full number shown)",
-  "micr": "MICR code at bottom of cheque (numbers with special symbols)",
-  "rawText": "all text you can read from the cheque"
+  "date": "date as shown (e.g. DD.MM.YY)",
+  "ref": "reference / description text (e.g. payee, purpose, or narration column)",
+  "chqNo": "cheque number",
+  "prj": "project / cost-centre code column",
+  "credit": "credit amount as shown, with thousands separators (e.g. 1,005.25). Empty string if blank or '-'",
+  "debit": "debit amount as shown, with thousands separators (e.g. 20,301.22). Empty string if blank or '-'",
+  "bal": "running balance amount as shown, with thousands separators. Empty string if not visible",
+  "rawText": "all text you can read from the row/cheque"
 }
 
 Rules:
-- If a field is not visible or cannot be read, use empty string ""
-- For amountNum, always include the $ symbol
-- For amountWords, write out the full amount in words
-- For account numbers, show only last 4 digits if full number is visible (e.g. ****1234)
-- The MICR line is at the very bottom - read all numbers and symbols you see there
+- If a field is not visible, blank, "-", or cannot be read, use empty string ""
+- Do not include currency symbols, only the numeric amount with commas and decimals
 - Be precise - do not guess. If unsure, leave empty.`
         }
       ]
@@ -72,13 +68,12 @@ Rules:
 
   const data: ChequeData = {
     date: parsed.date || '',
-    payee: parsed.payee || '',
-    amountNum: parsed.amountNum || '',
-    amountWords: parsed.amountWords || '',
-    chequeNo: parsed.chequeNo || '',
-    bank: parsed.bank || '',
-    account: parsed.account || '',
-    micr: parsed.micr || ''
+    ref: parsed.ref || '',
+    chqNo: parsed.chqNo || '',
+    prj: parsed.prj || '',
+    credit: parsed.credit || '',
+    debit: parsed.debit || '',
+    bal: parsed.bal || ''
   };
 
   const fieldScores = calculateConfidence(data);
@@ -90,24 +85,27 @@ Rules:
     ...data,
     confidence: fieldScores,
     overallConfidence,
-    amountMatch: checkAmountMatch(data.amountNum, data.amountWords),
+    amountMatch: checkAmountMatch(data.credit, data.debit),
     rawText: parsed.rawText || responseText.slice(0, 2000),
     processingTime: Date.now() - startTime,
-    ocrEngine: 'claude-3-5-sonnet'
+    ocrEngine: 'claude-sonnet-5'
   };
 }
 
 function calculateConfidence(data: ChequeData): Record<string, number> {
   const scores: Record<string, number> = {};
+  // date, ref, and prj can legitimately be blank on continuation rows (e.g. "bal b/f"),
+  // so a blank value there isn't necessarily an extraction failure.
+  const optionalWhenBlank = new Set(['date', 'prj', 'credit', 'debit']);
 
   for (const [field, value] of Object.entries(data)) {
     if (!value || value.trim() === '') {
-      scores[field] = 0;
-    } else if (field === 'amountNum' && value.match(/^\$[\d,]+\.\d{2}$/)) {
+      scores[field] = optionalWhenBlank.has(field) ? 70 : 0;
+    } else if ((field === 'credit' || field === 'debit' || field === 'bal') && value.match(/^[\d,]+\.\d{2}$/)) {
       scores[field] = 98;
     } else if (field === 'date' && value.match(/^\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}$/)) {
       scores[field] = 95;
-    } else if (field === 'chequeNo' && value.match(/^\d{6,10}$/)) {
+    } else if (field === 'chqNo' && value.match(/^\d{4,10}$/)) {
       scores[field] = 95;
     } else if (value.length > 3) {
       scores[field] = 90;
@@ -119,11 +117,9 @@ function calculateConfidence(data: ChequeData): Record<string, number> {
   return scores;
 }
 
-function checkAmountMatch(numStr: string, wordStr: string): boolean {
-  if (!numStr || !wordStr) return false;
-  const numMatch = numStr.match(/[\d,]+\.\d{2}/);
-  if (!numMatch) return false;
-  const numValue = parseFloat(numMatch[0].replace(/,/g, ''));
-  const hasDollarWords = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)\b/i.test(wordStr);
-  return numValue > 0 && hasDollarWords;
+// A cheque/ledger row should post to either the credit or the debit column, not both.
+function checkAmountMatch(creditStr: string, debitStr: string): boolean {
+  const hasCredit = !!creditStr && creditStr.trim() !== '';
+  const hasDebit = !!debitStr && debitStr.trim() !== '';
+  return hasCredit !== hasDebit; // exactly one filled in = consistent
 }

@@ -1,12 +1,11 @@
 export interface ChequeData {
   date: string;
-  payee: string;
-  amountNum: string;
-  amountWords: string;
-  chequeNo: string;
-  bank: string;
-  account: string;
-  micr: string;
+  ref: string;
+  chqNo: string;
+  prj: string;
+  credit: string;
+  debit: string;
+  bal: string;
 }
 
 export interface ExtractedResult extends ChequeData {
